@@ -1,6 +1,13 @@
 import Foundation
 import AppKit
 
+#if CAMERA_CONTROL_PLUGIN
+// Link a distinct helper executable. Copying the app's executable into the
+// plugin shares its Mach-O UUIDs and can confuse macOS Local Network privacy.
+let plugin=CameraPlugin()
+plugin.start(arguments:CommandLine.arguments)
+RunLoop.main.run()
+#else
 let args = CommandLine.arguments
 func argument(after flag:String)->String? { guard let i=args.firstIndex(of:flag), args.indices.contains(i+1) else{return nil}; return args[i+1] }
 func report(_ error:Error)->Never { fputs("\(error.localizedDescription)\n",stderr); exit(1) }
@@ -39,3 +46,4 @@ if let path=argument(after:"--finish-app-update") {
 } else {
     let app=NSApplication.shared; let delegate=BuilderDelegate(); app.delegate=delegate; app.setActivationPolicy(.regular); app.run()
 }
+#endif

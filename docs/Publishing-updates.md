@@ -75,6 +75,13 @@ If any installer bytes change, recompute and re-sign the checksum file before
 publishing. After publication, make a new version instead of replacing assets.
 Keep prereleases separate from stable updates.
 
+The build independently links the app and Stream Deck plugin, and checks that
+their Mach-O UUIDs differ for each architecture. Keep this check enabled:
+copying one executable into both locations can confuse macOS Local Network
+privacy identity tracking, as described in [Apple TN3179](https://developer.apple.com/documentation/technotes/tn3179-understanding-local-network-privacy).
+Both executables still require their normal code-signature verification. The
+published 2.1.0 assets remain immutable; this correction ships in 2.1.1.
+
 ## Continuous integration
 
 CI can test and build on a current macOS runner while targeting macOS 13 for both

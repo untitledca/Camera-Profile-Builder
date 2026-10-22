@@ -12,7 +12,14 @@ parts=list(map(int,VERSION.split('.')))
 BUILD_NUMBER=str(parts[0]*10000+parts[1]*100+parts[2])
 BUILD=ROOT/'build'; DIST=ROOT/'dist'; BUILD.mkdir(exist_ok=True); DIST.mkdir(exist_ok=True)
 def run(*args): subprocess.run([str(a) for a in args],check=True,cwd=ROOT)
+def macho_uuids(binary):
+    output=subprocess.check_output(['/usr/bin/dwarfdump','--uuid',str(binary)],text=True,cwd=ROOT)
+    identifiers={arch:identifier.upper() for identifier,arch in re.findall(r'UUID: ([0-9A-Fa-f-]+) \(([^)]+)\)',output)}
+    if set(identifiers) != {'arm64','x86_64'}:
+        raise SystemExit(f'{binary.name} must contain UUIDs for both arm64 and x86_64')
+    return identifiers
 APP=BUILD/'Camera Profile Builder.app'; CONTENTS=APP/'Contents'; RES=CONTENTS/'Resources'; MAC=CONTENTS/'MacOS'
+PLUGIN_BINARY=BUILD/'CameraControlPlugin'
 RES.mkdir(parents=True,exist_ok=True); MAC.mkdir(exist_ok=True)
 SNAPSHOT=BUILD/'sources'
 if SNAPSHOT.exists(): shutil.rmtree(SNAPSHOT)
@@ -22,7 +29,17 @@ sources=sorted(SNAPSHOT.glob('*.swift'))
 if not args.package_only:
     for arch in ['arm64','x86_64']:
         run('/usr/bin/swiftc','-swift-version','5','-O','-target',f'{arch}-apple-macos13.0',*sources,'-o',BUILD/f'CameraBuilder-{arch}')
+        run('/usr/bin/swiftc','-swift-version','5','-O','-target',f'{arch}-apple-macos13.0','-D','CAMERA_CONTROL_PLUGIN',*sources,'-o',BUILD/f'CameraPlugin-{arch}')
     run('/usr/bin/lipo','-create',BUILD/'CameraBuilder-arm64',BUILD/'CameraBuilder-x86_64','-output',MAC/'CameraProfileBuilder')
+    run('/usr/bin/lipo','-create',BUILD/'CameraPlugin-arm64',BUILD/'CameraPlugin-x86_64','-output',PLUGIN_BINARY)
+if not PLUGIN_BINARY.is_file():
+    raise SystemExit('The separately linked plugin is missing. Run a full build without --package-only.')
+app_uuids=macho_uuids(MAC/'CameraProfileBuilder')
+plugin_uuids=macho_uuids(PLUGIN_BINARY)
+for arch in ['arm64','x86_64']:
+    if app_uuids[arch] == plugin_uuids[arch]:
+        raise SystemExit(f'The app and plugin share the {arch} Mach-O UUID. Rebuild the plugin separately.')
+print('Verified distinct app and plugin Mach-O UUIDs for arm64 and x86_64.')
 info={'CFBundleDevelopmentRegion':'en','CFBundleDisplayName':'Camera Profile Builder','CFBundleExecutable':'CameraProfileBuilder','CFBundleIdentifier':'com.atomfilmlab.camera-profile-builder','CFBundleInfoDictionaryVersion':'6.0','CFBundleName':'Camera Profile Builder','CFBundlePackageType':'APPL','CFBundleShortVersionString':VERSION,'CFBundleVersion':BUILD_NUMBER,'LSApplicationCategoryType':'public.app-category.video','LSMinimumSystemVersion':'13.0','NSHighResolutionCapable':True,'CFBundleIconFile':'AppIcon','NSAppTransportSecurity':{'NSAllowsLocalNetworking':True},'CFBundleURLTypes':[{'CFBundleURLName':'Camera Builder','CFBundleURLSchemes':['cameraprofilebuilder']}],'NSLocalNetworkUsageDescription':'Connect to your ARRI cameras to read settings and control them from Stream Deck.'}
 (CONTENTS/'Info.plist').write_bytes(plistlib.dumps(info))
 run('/usr/bin/swift',ROOT/'scripts/make_icon.swift',BUILD/'icon-png')
@@ -32,7 +49,7 @@ for size in [16,32,128,256,512]:
     shutil.copy(BUILD/'icon-png'/f'{size*2}.png',ICONSET/f'icon_{size}x{size}@2x.png')
 run('/usr/bin/iconutil','-c','icns',ICONSET,'-o',RES/'AppIcon.icns')
 PLUGIN=RES/'com.atomfilmlab.camera-control.sdPlugin'; (PLUGIN/'Images').mkdir(parents=True,exist_ok=True); (PLUGIN/'layouts').mkdir(exist_ok=True)
-shutil.copy(MAC/'CameraProfileBuilder',PLUGIN/'CameraControlPlugin'); (PLUGIN/'CameraControlPlugin').chmod(0o755)
+shutil.copy(PLUGIN_BINARY,PLUGIN/'CameraControlPlugin'); (PLUGIN/'CameraControlPlugin').chmod(0o755)
 for image in (ROOT/'assets/reference-icons').glob('*.png'): shutil.copy(image,PLUGIN/'Images'/image.name)
 run('/usr/bin/swift',ROOT/'scripts/make_plugin_icons.swift',PLUGIN/'Images')
 manifest={'$schema':'https://schemas.elgato.com/streamdeck/plugins/manifest.json','Actions':[{'UUID':'com.atomfilmlab.camera-control.dial','Name':'Camera Setting','Icon':'Images/dial','Controllers':['Encoder'],'States':[{'Image':'Images/wb','ShowTitle':False}],'Encoder':{'layout':'layouts/camera.json','TriggerDescription':{'Rotate':'Adjust camera setting','Push':'Reset setting / play or pause','Touch':'Reset setting / play or pause'}}},{'UUID':'com.atomfilmlab.camera-control.button','Name':'Camera Button','Icon':'Images/button','Controllers':['Keypad'],'States':[{'Image':'Images/settings'}],'Tooltip':'Camera command or camera/gang setup'}],'Author':'Atom Film Lab','Category':'Camera Control','CategoryIcon':'Images/category','CodePath':'CameraControlPlugin','CodePathMac':'CameraControlPlugin','Description':'ARRI camera controls with live readback and multi-camera ganging. Configure cameras in Camera Profile Builder.','Icon':'Images/plugin','Name':'Camera Control','OS':[{'Platform':'mac','MinimumVersion':'13.0'}],'PropertyInspectorPath':'inspector.html','SDKVersion':2,'Software':{'MinimumVersion':'6.6'},'UUID':'com.atomfilmlab.camera-control','Version':'2.0.0.0'}
