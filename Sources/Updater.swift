@@ -420,10 +420,12 @@ enum UpdateInstaller {
     @Published var status = "Check GitHub for a newer build."
     @Published var error = ""
     @Published var availableRelease: UpdateRelease?
+    @Published private(set) var relaunchReady = false
+    private var relaunchScheduled = false
     @Published var automaticChecks: Bool {
         didSet { UserDefaults.standard.set(automaticChecks, forKey: "AutomaticallyCheckForUpdates") }
     }
-    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.1.1" }
+    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.1.2" }
     init() {
         automaticChecks = UserDefaults.standard.bool(forKey: "AutomaticallyCheckForUpdates")
         if let data = try? Data(contentsOf: UpdateInstaller.resultURL),
@@ -467,8 +469,15 @@ enum UpdateInstaller {
                 do { try UpdateInstaller.begin(plan) }
                 catch { try? FileManager.default.removeItem(atPath: plan.workDirectory); throw error }
                 status = "Installing \(release.version). The app will reopen shortly…"
-                NSApplication.shared.terminate(nil)
+                // A presented SwiftUI sheet can prevent AppKit termination.
+                // The view dismisses it and calls completeRelaunch from onDismiss.
+                relaunchReady = true
             } catch { installing = false; status = "The update was not installed."; self.error = error.localizedDescription }
         }
+    }
+    func completeRelaunch() {
+        guard relaunchReady, !relaunchScheduled else { return }
+        relaunchScheduled = true
+        RunLoop.main.perform(inModes: [.common]) { NSApplication.shared.terminate(nil) }
     }
 }

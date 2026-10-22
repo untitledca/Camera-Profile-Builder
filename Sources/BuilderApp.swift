@@ -212,7 +212,12 @@ struct BuilderView: View {
         }.background(Color(red:0.065,green:0.085,blue:0.11)).preferredColorScheme(.dark)
         .textFieldStyle(.roundedBorder)
         .sheet(isPresented:$data.showGang) { gangSheet }
-        .sheet(isPresented:$data.showUpdates) { updateSheet }
+        .sheet(isPresented:$data.showUpdates,onDismiss:{ updates.completeRelaunch() }) { updateSheet }
+        .onChange(of:updates.relaunchReady) { ready in
+            guard ready else { return }
+            if data.showUpdates { data.showUpdates=false }
+            else { updates.completeRelaunch() }
+        }
         .onAppear { updates.checkOnLaunch() }
         .alert("Camera Profile Builder",isPresented:Binding(get:{!data.error.isEmpty},set:{if !$0 {data.error=""}})) { Button("OK"){data.error=""} } message:{Text(data.error)}
     }

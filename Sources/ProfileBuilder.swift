@@ -246,7 +246,7 @@ enum ProfileBuilder {
         actionSettings["cameraID"] = cameraID
         return [
             "ActionID": freshID().lowercased(), "LinkedTitle": true, "Name": title,
-            "Plugin": ["Name": "Camera Control", "UUID": pluginID, "Version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.1.1"],
+            "Plugin": ["Name": "Camera Control", "UUID": pluginID, "Version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.1.2"],
             "Resources": NSNull(), "Settings": actionSettings, "State": 0,
             "States": [state(title: title, icon: icon)], "UUID": "\(pluginID).\(kind)"
         ]
