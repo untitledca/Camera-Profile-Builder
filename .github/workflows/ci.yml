@@ -1,0 +1,78 @@
+name: Build and test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Prepare test output
+        run: mkdir -p build/ci-tests
+
+      - name: Test camera control core
+        run: |
+          swiftc -swift-version 5 Sources/CameraCore.swift tests/CameraCoreTests.swift -o build/ci-tests/camera-core
+          build/ci-tests/camera-core
+
+      - name: Test portable camera folders
+        run: |
+          swiftc -swift-version 5 Sources/CameraCore.swift Sources/ProfileBuilder.swift tests/ProfileBuilderTests.swift -o build/ci-tests/profiles
+          build/ci-tests/profiles
+
+      - name: Test installer preferences
+        run: |
+          swiftc -swift-version 5 Sources/CameraCore.swift Sources/ProfileBuilder.swift Sources/ConfigStore.swift tests/InstallerPreferenceTests.swift -o build/ci-tests/installer
+          build/ci-tests/installer
+
+      - name: Test profile preparation and preference rollback
+        run: |
+          swiftc -swift-version 5 Sources/CameraCore.swift Sources/ProfileBuilder.swift Sources/ConfigStore.swift tests/InstallerProfileTests.swift -o build/ci-tests/installer-profiles
+          build/ci-tests/installer-profiles
+
+      - name: Test update validation
+        run: |
+          swiftc -swift-version 5 Sources/Updater.swift Sources/UpdatePublicKey.swift tests/UpdaterTests.swift -o build/ci-tests/updater
+          build/ci-tests/updater
+
+      - name: Typecheck release signing helper for macOS 13
+        run: |
+          swiftc -swift-version 5 -target arm64-apple-macos13.0 -typecheck scripts/update_signing.swift
+          swiftc -swift-version 5 -target x86_64-apple-macos13.0 -typecheck scripts/update_signing.swift
+
+      - name: Build universal macOS 13 app and installers
+        # Ad-hoc Apple code signing is local to this build. Update signing is
+        # deliberately omitted: the Ed25519 release key stays on the release Mac.
+        run: python3 scripts/build.py
+
+      - name: Test bundled native plugin with simulated cameras
+        run: python3 tests/plugin_integration.py --executable "build/Camera Profile Builder.app/Contents/Resources/com.atomfilmlab.camera-control.sdPlugin/CameraControlPlugin"
+
+      - name: Verify installer checksums
+        working-directory: dist
+        run: shasum -a 256 -c SHA256SUMS.txt
+
+      - name: Save tested build artifacts
+        # These are workflow artifacts, not a published release or trusted update.
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Camera-Profile-Builder-${{ github.sha }}
+          path: |
+            dist/Camera_Profile_Builder_*.dmg
+            dist/Camera_Profile_Builder_*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

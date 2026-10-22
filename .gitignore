@@ -1,0 +1,6 @@
+build/
+dist/
+.DS_Store
+reference/camera-*.js
+reference/camera-snapshot.json
+tests/output/

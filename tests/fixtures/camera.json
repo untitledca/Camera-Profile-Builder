@@ -1,0 +1,167 @@
+{
+  "id": 1,
+  "variables": {
+    "WBCurrentKelvin": {
+      "value": 5600,
+      "type": "float",
+      "min": 2000,
+      "max": 11000,
+      "readonly": 0
+    },
+    "WBCurrentColorComp": {
+      "value": 0,
+      "type": "float",
+      "min": -16,
+      "max": 16,
+      "readonly": 0
+    },
+    "ShutterNominal": {
+      "value": 180,
+      "type": "float",
+      "min": 5,
+      "max": 356,
+      "readonly": 0
+    },
+    "ExposureIndex": {
+      "value": 7,
+      "type": "enumint",
+      "min": 0,
+      "max": 13,
+      "properties": [
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "readonly": 0
+    },
+    "NDFilterPosition": {
+      "value": 0,
+      "type": "enumint",
+      "min": 0,
+      "max": 3,
+      "properties": [
+        3,
+        3,
+        3,
+        3
+      ],
+      "readonly": 0
+    },
+    "NDFilterPositionEffective": {
+      "value": 0,
+      "type": "enumint",
+      "min": 0,
+      "max": 3,
+      "properties": [
+        3,
+        3,
+        3,
+        3
+      ],
+      "readonly": 1
+    },
+    "FPSNominal": {
+      "value": 30,
+      "type": "float",
+      "min": 0.75,
+      "max": 40,
+      "readonly": 0
+    },
+    "FPSEffective": {
+      "value": 30,
+      "type": "float",
+      "min": 0.75,
+      "max": 40,
+      "readonly": 1
+    },
+    "ExposurePreferenceIsAngle": {
+      "value": true,
+      "type": "bool",
+      "readonly": 0
+    },
+    "PlaybackSpeedEnum": {
+      "value": 10,
+      "type": "enumint",
+      "min": 0,
+      "max": 20,
+      "properties": [
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3,
+        3
+      ],
+      "readonly": 0
+    },
+    "PlaybackSpeed": {
+      "value": 0,
+      "type": "int",
+      "readonly": 1
+    },
+    "_PlaybackControlsAreActive": {
+      "value": false,
+      "type": "bool",
+      "readonly": 0
+    },
+    "PlaybackClipIndex": {
+      "value": -1,
+      "type": "int",
+      "readonly": 1
+    },
+    "ClipCountCardA": {
+      "value": 0,
+      "type": "int",
+      "readonly": 1
+    },
+    "ClipCountCardB": {
+      "value": 0,
+      "type": "int",
+      "readonly": 1
+    },
+    "ClipTableCardAVersion": {
+      "value": 1,
+      "type": "int",
+      "readonly": 1
+    },
+    "ClipTableCardBVersion": {
+      "value": 3,
+      "type": "int",
+      "readonly": 1
+    }
+  },
+  "commands": {
+    "_EeUkIwIBEeSgptigTra4vQ": "PlayBackPrepare",
+    "_7q_F4cHREeStK8NH8ZPGbQ": "PlayBackGo",
+    "__WRr68HREeStK8NH8ZPGbQ": "PlayBackStop",
+    "_cCCFscHSEeStK8NH8ZPGbQ": "PlayBackEnd",
+    "_BJbzscJjEeSbpa7lQ8OAJw": "PlayBackSkipClip",
+    "_H_V7l8JjEeSbpa7lQ8OAJw": "PlayBackSkipClip"
+  }
+}
