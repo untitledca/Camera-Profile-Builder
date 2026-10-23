@@ -13,6 +13,7 @@ final class BuilderModel: ObservableObject {
     @Published var working = false
     @Published var showGang = false
     @Published var showUpdates = false
+    @Published var showFeedback = false
     @Published var gangDraftIDs: [String] = []
     @Published var error = ""
     let models = ["ALEXA Mini LF", "ALEXA Mini", "AMIRA", "ALEXA 35", "ALEXA 35 Xtreme", "ALEXA LF", "ALEXA SXT", "ALEXA 65"]
@@ -41,6 +42,17 @@ final class BuilderModel: ObservableObject {
         config.selectedCameraID=camera.id
     }
     func newCamera() { editingID=""; name="\(String(UnicodeScalar(65+min(config.cameras.count,25))!)) CAM"; address=""; model="ALEXA Mini LF"; values=[:] }
+    func saveFeedbackMode(_ mode: FeedbackMode) {
+        guard mode != config.feedbackMode else { return }
+        do {
+            // Preserve changes made by the running plugin while this window was open.
+            var latest = try ConfigStore.load()
+            latest.feedbackMode = mode
+            try ConfigStore.save(latest)
+            config.feedbackMode = mode
+            status = "Feedback: \(mode.title). Applies to all existing camera controls without rebuilding profiles."
+        } catch { self.error = "Feedback mode could not be saved: \(error.localizedDescription)" }
+    }
     @discardableResult func saveCamera() -> Bool {
         do {
             let cleanName = name.trimmingCharacters(in:.whitespacesAndNewlines)
@@ -151,7 +163,10 @@ struct BuilderView: View {
                 Spacer()
                 VStack(alignment:.trailing,spacing:6) {
                     Text(updates.currentVersion).font(.system(.caption,design:.monospaced)).foregroundStyle(.secondary)
-                    Button("Updates…") { data.showUpdates=true }
+                    HStack(spacing:10) {
+                        Button("Feedback…") { data.showFeedback=true }
+                        Button("Updates…") { data.showUpdates=true }
+                    }
                 }
             }.padding(24)
             Divider()
@@ -194,7 +209,7 @@ struct BuilderView: View {
                     Text("YOUR DIALS").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     HStack(spacing:10) { dial("wb","White balance","sun.max","100 K per step"); dial("playback","Playback","playpause","Speed / play / pause"); dial("tint","CC tint","slider.horizontal.3","0.5 per step"); dial("shutter","Shutter","camera.aperture","0.1° per step") }
                     HStack(spacing:10) { dial("ei","Exposure index","plusminus.circle","Camera EI choices"); dial("nd","ND filter","circle.lefthalf.filled","Camera ND choices"); dial("fps","Sensor FPS","film","1 fps per step") }
-                    Text("The touch strip shows camera readback. Mixed gang values and lost connections are shown explicitly. Press a dial to reset; press playback to play or pause.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+                    Text("The touch strip identifies pending and cached values. Choose Live, Reduced, or Off in Feedback…. Press a dial to reset; press playback to play or pause.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
                     Spacer(minLength:0)
                 }.padding(24).frame(maxWidth:.infinity,alignment:.leading)
             }.frame(maxHeight:.infinity)
@@ -212,6 +227,7 @@ struct BuilderView: View {
         }.background(Color(red:0.065,green:0.085,blue:0.11)).preferredColorScheme(.dark)
         .textFieldStyle(.roundedBorder)
         .sheet(isPresented:$data.showGang) { gangSheet }
+        .sheet(isPresented:$data.showFeedback) { feedbackSheet }
         .sheet(isPresented:$data.showUpdates,onDismiss:{ updates.completeRelaunch() }) { updateSheet }
         .onChange(of:updates.relaunchReady) { ready in
             guard ready else { return }
@@ -250,6 +266,18 @@ struct BuilderView: View {
             }
         }.padding(26).frame(width:530).preferredColorScheme(.dark)
         .onAppear { updates.checkForUpdates(manual:true) }
+    }
+    private var feedbackSheet: some View {
+        VStack(alignment:.leading,spacing:18) {
+            Label("Camera Feedback",systemImage:"dial.medium").font(.title2.weight(.semibold))
+            Text("Camera commands take priority in every mode.").fontWeight(.medium)
+            Picker("Feedback",selection:Binding(get:{data.config.feedbackMode},set:{data.saveFeedbackMode($0)})) {
+                ForEach(FeedbackMode.allCases,id:\.rawValue) { mode in Text(mode.title).tag(mode) }
+            }.pickerStyle(.segmented).labelsHidden().disabled(data.working)
+            Text("Live checks about once a second. Reduced checks about every three seconds. Off stops routine polling; controls still read when needed and verify changes.").foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+            Text("Pending values are waiting for camera confirmation. Cached values are the last confirmed reading and may have changed on the camera. The selected mode applies to all camera folders, including copies in your other profiles.").font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+            HStack { Spacer(); Button("Done") { data.showFeedback=false }.keyboardShortcut(.defaultAction) }
+        }.padding(26).frame(width:490).preferredColorScheme(.dark)
     }
     private var gangSheet: some View {
         VStack(alignment:.leading,spacing:18) {

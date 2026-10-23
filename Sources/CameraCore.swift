@@ -15,6 +15,48 @@ struct BuilderConfig: Codable, Equatable {
     var gangIDs: [String]
     var gangEnabled: Bool
     var gangMode: String
+    var feedbackMode: FeedbackMode = .live
+
+    private enum CodingKeys: String, CodingKey {
+        case cameras, selectedCameraID, gangIDs, gangEnabled, gangMode, feedbackMode
+    }
+}
+
+extension BuilderConfig {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        cameras = try values.decode([CameraConfig].self, forKey: .cameras)
+        selectedCameraID = try values.decode(String.self, forKey: .selectedCameraID)
+        gangIDs = try values.decode([String].self, forKey: .gangIDs)
+        gangEnabled = try values.decode(Bool.self, forKey: .gangEnabled)
+        gangMode = try values.decode(String.self, forKey: .gangMode)
+        feedbackMode = try values.decodeIfPresent(FeedbackMode.self, forKey: .feedbackMode) ?? .live
+    }
+}
+
+enum FeedbackMode: String, Codable, CaseIterable {
+    case live, reduced, off
+
+    var title: String {
+        switch self {
+        case .live: return "Live"
+        case .reduced: return "Reduced"
+        case .off: return "Off"
+        }
+    }
+
+    var pollInterval: TimeInterval? {
+        switch self {
+        case .live: return 1
+        case .reduced: return 3
+        case .off: return nil
+        }
+    }
+
+    init(from decoder: Decoder) throws {
+        let value = try decoder.singleValueContainer()
+        self = (try? value.decode(String.self)).flatMap(Self.init(rawValue:)) ?? .live
+    }
 }
 
 enum CameraError: LocalizedError {
@@ -295,6 +337,17 @@ struct CameraSnapshot {
         }
         return output
     }
+
+    /// Builds a validated desired state for coalescing later adjustments. This
+    /// value has not been read back from the camera and must remain distinct
+    /// from the last confirmed snapshot in callers.
+    func applying(_ values: [String: Any]) throws -> CameraSnapshot {
+        guard !values.isEmpty else { return self }
+        let payload = try validatedValues(values)
+        var desired = variables
+        for (key, value) in payload { desired[key]?["value"] = value }
+        return try CameraSnapshot(json: ["id": id, "variables": desired, "commands": commands], enumCatalog: enumCatalog)
+    }
 }
 
 /// Synchronous transport for a background queue. It never updates UI, and it
@@ -307,6 +360,8 @@ final class CameraClient {
     private var loadedEnums = false
     private var lastSnapshot: CameraSnapshot?
     private let timeout: TimeInterval
+    private let readTasksLock = NSLock()
+    private var readTasks: [Int: URLSessionDataTask] = [:]
 
     static let supportedCommandNames: Set<String> = ["PlayBackPrepare", "PlayBackGo", "PlayBackStop", "PlayBackEnd", "PlayBackPos", "PlayBackSkipClip", "RecordingStart", "RecordingStop", "PlaybackEnter", "PlaybackExit", "PlaybackSkipRev", "PlaybackSkipFwd"]
     private static let preferredCommands = ["PlayBackPrepare": "_EeUkIwIBEeSgptigTra4vQ", "PlayBackGo": "_7q_F4cHREeStK8NH8ZPGbQ", "PlayBackStop": "__WRr68HREeStK8NH8ZPGbQ", "PlayBackEnd": "_cCCFscHSEeStK8NH8ZPGbQ"]
@@ -391,9 +446,7 @@ final class CameraClient {
     @discardableResult
     func set(_ values: [String: Any]) throws -> CameraSnapshot {
         let current = try read()
-        let payload = try current.validatedValues(values)
-        let response = try requestJSON(path: "/set.cgi", body: payload)
-        guard (response["result"] as? NSNumber)?.intValue == 1 else { throw CameraError.rejected(Self.reason(response)) }
+        let payload = try submit(values, using: current)
         // An accepted HTTP write is followed by authoritative camera feedback.
         // A few settings settle after the CGI response; don't repeat the write.
         var snapshot = try read()
@@ -413,6 +466,23 @@ final class CameraClient {
     @discardableResult
     func call(_ command: String, values: [String: Any] = [:]) throws -> CameraSnapshot {
         let current = try read()
+        try submitCommand(command, using: current, values: values)
+        return try read()
+    }
+
+    /// Validates against a recent snapshot and posts once without fetching
+    /// camera state. Acceptance is not confirmation; callers verify separately.
+    @discardableResult
+    func submit(_ values: [String: Any], using current: CameraSnapshot) throws -> [String: Any] {
+        let payload = try current.validatedValues(values)
+        let response = try requestJSON(path: "/set.cgi", body: payload)
+        guard (response["result"] as? NSNumber)?.intValue == 1 else { throw CameraError.rejected(Self.reason(response)) }
+        return payload
+    }
+
+    /// Resolves only commands advertised by the supplied firmware snapshot.
+    /// Submission is deliberately separate from asynchronous camera readback.
+    func submitCommand(_ command: String, using current: CameraSnapshot, values: [String: Any] = [:]) throws {
         let aliases = ["PlaybackEnter": "PlayBackPrepare", "PlaybackExit": "PlayBackEnd", "PlaybackSkipRev": "PlayBackSkipClip", "PlaybackSkipFwd": "PlayBackSkipClip"]
         let name = current.commands[command] ?? aliases[command] ?? command
         guard Self.supportedCommandNames.contains(name), current.commandNames.contains(name) else { throw CameraError.unavailable(command) }
@@ -437,10 +507,18 @@ final class CameraClient {
         // The camera's CamCom treats nonnegative call.cgi results as accepted.
         // Playback's own controller does not issue WaitForCommandResult; that
         // separate wait.cgi operation is used by list edits and file actions.
-        // Return actual camera feedback, allowing the poll to observe a later
-        // asynchronous state change instead of inventing a completed state.
+        // A later read observes any asynchronous state change; acceptance alone
+        // does not imply that the command has finished.
         guard let result = response["result"] as? NSNumber, result.intValue >= 0 else { throw CameraError.rejected(Self.reason(response)) }
-        return try read()
+    }
+
+    /// A newly queued command may interrupt background polling. Never cancel
+    /// POST requests: retrying an interrupted write could apply it twice.
+    func cancelPendingReads() {
+        readTasksLock.lock()
+        let pending = Array(readTasks.values)
+        readTasksLock.unlock()
+        for task in pending { task.cancel() }
     }
 
     private static func reason(_ response: [String: Any]) -> String {
@@ -473,6 +551,18 @@ final class CameraClient {
         let task = session.dataTask(with: request) { data, response, error in
             box.data = data; box.response = response; box.error = error
             semaphore.signal()
+        }
+        if body == nil {
+            readTasksLock.lock()
+            readTasks[task.taskIdentifier] = task
+            readTasksLock.unlock()
+        }
+        defer {
+            if body == nil {
+                readTasksLock.lock()
+                readTasks.removeValue(forKey: task.taskIdentifier)
+                readTasksLock.unlock()
+            }
         }
         task.resume()
         guard semaphore.wait(timeout: .now() + timeout + 0.5) == .success else { task.cancel(); throw CameraError.timeout }

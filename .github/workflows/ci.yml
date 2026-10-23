@@ -27,6 +27,11 @@ jobs:
           swiftc -swift-version 5 Sources/CameraCore.swift tests/CameraCoreTests.swift -o build/ci-tests/camera-core
           build/ci-tests/camera-core
 
+      - name: Test feedback configuration compatibility
+        run: |
+          swiftc -swift-version 5 Sources/CameraCore.swift tests/FeedbackModeTests.swift -o build/ci-tests/feedback
+          build/ci-tests/feedback
+
       - name: Test portable camera folders
         run: |
           swiftc -swift-version 5 Sources/CameraCore.swift Sources/ProfileBuilder.swift tests/ProfileBuilderTests.swift -o build/ci-tests/profiles

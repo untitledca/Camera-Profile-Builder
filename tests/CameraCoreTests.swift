@@ -39,6 +39,55 @@ private final class CameraMockProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
+/// Holds an in-flight read and write so cancellation can be checked without
+/// opening a network connection or relying on timing-dependent server delays.
+private final class CameraCancellationHarness: @unchecked Sendable {
+    let readStarted = DispatchSemaphore(value: 0)
+    let postStarted = DispatchSemaphore(value: 0)
+    let releasePost = DispatchSemaphore(value: 0)
+    let completed = DispatchGroup()
+    private let lock = NSLock()
+    private var cancelledMethods: [String] = []
+    private var readError: Error?
+    private var postError: Error?
+    private var postSucceeded = false
+
+    func stopped(_ method: String) { lock.lock(); cancelledMethods.append(method); lock.unlock() }
+    func recordRead(_ error: Error?) { lock.lock(); readError = error; lock.unlock() }
+    func recordPost(_ error: Error?) { lock.lock(); postError = error; postSucceeded = error == nil; lock.unlock() }
+    func verify() throws {
+        lock.lock(); defer { lock.unlock() }
+        try check((readError as? URLError)?.code == .cancelled, "Interrupting polling returns cancellation to the reader")
+        try check(postSucceeded && postError == nil, "Interrupting polling preserves an active POST")
+        try check(cancelledMethods.contains("GET") && !cancelledMethods.contains("POST"), "Only GET tasks are cancelled: \(cancelledMethods)")
+    }
+}
+
+private final class CameraCancellationProtocol: URLProtocol, @unchecked Sendable {
+    static var harness: CameraCancellationHarness?
+    private let completionLock = NSLock()
+    private var returningResponse = false
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        guard let harness = Self.harness else { return }
+        if request.httpMethod == "GET" { harness.readStarted.signal(); return }
+        harness.postStarted.signal()
+        DispatchQueue.global().async { [self] in
+            guard harness.releasePost.wait(timeout: .now() + 3) == .success else { return }
+            completionLock.lock(); returningResponse = true; completionLock.unlock()
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data("{\"result\":1}".utf8))
+            client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+    override func stopLoading() {
+        completionLock.lock(); let interrupted = !returningResponse; completionLock.unlock()
+        if interrupted { Self.harness?.stopped(request.httpMethod ?? "GET") }
+    }
+}
+
 @main
 struct CameraCoreTests {
     static func main() throws {
@@ -73,6 +122,16 @@ struct CameraCoreTests {
         try mustThrow("Boolean cannot masquerade as numeric") { _ = try snapshot.validatedValues(["wb": true]) }
         try mustThrow("Nonfinite values are rejected") { _ = try snapshot.validatedValues(["wb": Double.nan]) }
         try mustThrow("Boolean fields require booleans") { _ = try snapshot.validatedValues(["ExposurePreferenceIsAngle": 1]) }
+        let desired = try snapshot.applying(["wb": 5700, "tint": 0.5])
+        let unchanged = try snapshot.applying([:])
+        try check(unchanged.description(for: "wb") == snapshot.description(for: "wb") && unchanged.id == snapshot.id, "Empty desired state preserves the confirmed snapshot")
+        try mustThrow("Empty write payloads remain invalid") { _ = try snapshot.validatedValues([:]) }
+        try check(desired.description(for: "wb") == "5700K", "Desired snapshot applies normalized aliases")
+        try check(snapshot.description(for: "wb") == "5600K", "Desired state never mutates confirmed feedback")
+        try check(desired.id == snapshot.id && desired.commands == snapshot.commands, "Desired snapshot preserves firmware capabilities")
+        try check(desired.bounds(for: "wb") == snapshot.bounds(for: "wb"), "Desired snapshot preserves camera limits")
+        try check(desired.choices(for: "ei").map(\.wireValue) == snapshot.choices(for: "ei").map(\.wireValue), "Desired snapshot preserves enum definitions")
+        try mustThrow("Desired state rejects locked settings") { _ = try snapshot.applying(["FPSEffective": 24]) }
         let unknownEnums = try CameraSnapshot(json: json)
         try check(!unknownEnums.canWrite("ei"), "Missing enum definitions must disable ambiguous EI writes")
 
@@ -91,11 +150,13 @@ struct CameraCoreTests {
         let session = URLSession(configuration: configuration)
         var cameraJSON = json
         var posts = 0
+        var gets = 0
         var acceptWrite = true
         var updateFeedback = true
         var callResult = 1
         var lastCall: [String: Any] = [:]
         CameraMockProtocol.handler = { request in
+            if request.httpMethod == "GET" { gets += 1 }
             switch request.url!.path {
             case "/js/all-dg.min.js": return Data(source.utf8)
             case "/all.cgi": return try JSONSerialization.data(withJSONObject: cameraJSON)
@@ -116,6 +177,29 @@ struct CameraCoreTests {
             }
         }
         let camera = CameraClient(address: "10.10.1.41", session: session)
+        updateFeedback = false
+        let submitted = try camera.submit(["wb": 5700], using: snapshot)
+        try check(gets == 0 && posts == 1, "Cached submission performs one POST and no GETs")
+        try check((submitted["WBCurrentKelvin"] as? NSNumber)?.intValue == 5700 && submitted["wb"] == nil, "Submission returns normalized payload")
+        try check(snapshot.description(for: "wb") == "5600K", "Accepted submission never becomes confirmed feedback")
+        try check((cameraJSON["variables"] as? [String: [String: Any]])?["WBCurrentKelvin"]?["value"] as? Int == 5600, "Mock camera can accept without reflecting the desired value")
+        try mustThrow("Cached submission rejects locked values before posting") { _ = try camera.submit(["FPSEffective": 24], using: snapshot) }
+        try check(gets == 0 && posts == 1, "Rejected cached validation makes no requests")
+        try mustThrow("Cached submission rejects empty payloads") { _ = try camera.submit([:], using: snapshot) }
+        try check(gets == 0 && posts == 1, "Empty cached submission makes no requests")
+        acceptWrite = false
+        try mustThrow("Cached submission rejects camera refusal") { _ = try camera.submit(["wb": 5800], using: snapshot) }
+        try check(gets == 0 && posts == 2, "Camera refusal is not retried or read back during submission")
+        try camera.submitCommand("PlaybackSkipRev", using: snapshot)
+        try check(gets == 0 && posts == 3, "Cached command performs one POST and no GETs")
+        try check(lastCall["command"] as? String == "_BJbzscJjEeSbpa7lQ8OAJw", "Cached command preserves firmware-specific alias resolution")
+        try mustThrow("Cached unsupported commands cannot post") { try camera.submitCommand("FactoryDefault", using: snapshot) }
+        try mustThrow("Cached playback checks recorded media before posting") { try camera.submitCommand("PlaybackEnter", using: snapshot) }
+        try check(gets == 0 && posts == 3, "Unavailable cached commands make no requests")
+        callResult = -1
+        try mustThrow("Cached call rejects a negative result") { try camera.submitCommand("PlayBackStop", using: snapshot) }
+        try check(gets == 0 && posts == 4, "Rejected cached command is posted exactly once")
+        callResult = 1; posts = 0; gets = 0; acceptWrite = true; updateFeedback = true
         let changed = try camera.set(["wb": 5700])
         try check(changed.description(for: "wb") == "5700K", "Write returns verified camera feedback")
         try check(posts == 1, "Exactly one write")
@@ -138,7 +222,33 @@ struct CameraCoreTests {
         try mustThrow("Playback without recorded clips must fail clearly") { _ = try camera.call("PlaybackEnter") }
         try check(posts == beforeEmptyPlayback, "No playback request without media")
         session.invalidateAndCancel()
-        print("PASS: fixture mapping, address validation, camera limits, semantic gang conversion, refusal handling and verified feedback")
+
+        let cancellation = CameraCancellationHarness()
+        CameraCancellationProtocol.harness = cancellation
+        let cancellationConfiguration = URLSessionConfiguration.ephemeral
+        cancellationConfiguration.protocolClasses = [CameraCancellationProtocol.self]
+        let cancellationSession = URLSession(configuration: cancellationConfiguration)
+        let interruptible = CameraClient(address: "camera.test", timeout: 1, session: cancellationSession)
+        cancellation.completed.enter()
+        DispatchQueue.global().async {
+            do { _ = try interruptible.read(); cancellation.recordRead(nil) }
+            catch { cancellation.recordRead(error) }
+            cancellation.completed.leave()
+        }
+        try check(cancellation.readStarted.wait(timeout: .now() + 2) == .success, "Mock read started")
+        cancellation.completed.enter()
+        DispatchQueue.global().async {
+            do { _ = try interruptible.submit(["wb": 5700], using: snapshot); cancellation.recordPost(nil) }
+            catch { cancellation.recordPost(error) }
+            cancellation.completed.leave()
+        }
+        try check(cancellation.postStarted.wait(timeout: .now() + 2) == .success, "Mock write started")
+        interruptible.cancelPendingReads()
+        cancellation.releasePost.signal()
+        try check(cancellation.completed.wait(timeout: .now() + 3) == .success, "Cancelled read and preserved write finish")
+        try cancellation.verify()
+        cancellationSession.invalidateAndCancel()
+        print("PASS: fixture mapping, cached command submission, read cancellation, camera limits, semantic gang conversion, refusal handling and verified feedback")
 
         if CommandLine.arguments.contains("--live") {
             let client = CameraClient(address: "10.10.1.41")

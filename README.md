@@ -36,7 +36,17 @@ Copies on the same Mac refer to the same saved camera. Editing that camera's IP 
 | ND filter | Camera's available ND choices | Reset to clear |
 | Sensor FPS | 1 fps; hold and turn for 0.1 fps | Reset to 24 fps |
 
-The touch strip shows camera readback. Available choices, limits, and locked settings come from the camera. Unsupported controls fail visibly. Playback requires recorded clips on the camera media.
+Camera commands take priority over routine feedback reads. The touch strip identifies a pending setting while it waits for camera confirmation and marks cached values that may have changed since their last reading. Available choices, limits, and locked settings come from the camera. Unsupported controls fail visibly. Playback requires recorded clips on the camera media.
+
+Use **Feedback…** in the builder to choose a mode for every camera control, including copied folders:
+
+| Mode | Routine camera readback |
+| --- | --- |
+| Live | About once per second while idle |
+| Reduced | About every three seconds while idle |
+| Off | No routine polling |
+
+All modes prioritize commands, read camera information when needed, and verify requested changes. Off reduces background traffic; it does not remove the reads needed to control a camera safely. Changing feedback mode saves a local preference without changing camera settings, rebuilding profiles, or restarting Stream Deck. Existing configurations keep Live feedback until you choose another mode.
 
 ## Gang cameras
 
@@ -49,6 +59,8 @@ Turning a knob sets the selected cameras to the same semantic value, using the f
 Use **Updates…** in the app to check GitHub and select **Install & Relaunch** when a newer build is available. Automatic startup checks can be enabled in the same window.
 
 The updater requires an Ed25519 signed checksum manifest, checks the downloaded app's SHA-256 hash, validates its bundle and version, and replaces the app with a recoverable backup. After relaunch, an older installed Camera Control plugin is refreshed without regenerating profiles or changing copied camera folders.
+
+**Your existing camera buttons update with the plugin.** Generated and pasted controls use stable action IDs, so behavior, dial feedback, and plugin-managed artwork improvements apply to every copy. You do not need to copy your camera folders again. Updates preserve each profile's placement and configuration. Adding a newly introduced physical button or rearranging a layout still requires an explicit profile edit; software updates do not rewrite your working profiles.
 
 This release is ad-hoc signed and is not Apple notarized. The updater does not remove quarantine attributes or change macOS security settings. Apple Developer signing and notarization are separate from the update signatures.
 
@@ -67,6 +79,9 @@ python3 scripts/build.py
 
 swiftc -swift-version 5 Sources/CameraCore.swift tests/CameraCoreTests.swift -o /tmp/camera-core-tests
 /tmp/camera-core-tests
+
+swiftc -swift-version 5 Sources/CameraCore.swift tests/FeedbackModeTests.swift -o /tmp/camera-feedback-tests
+/tmp/camera-feedback-tests
 
 swiftc -swift-version 5 Sources/CameraCore.swift Sources/ProfileBuilder.swift tests/ProfileBuilderTests.swift -o /tmp/camera-profile-tests
 /tmp/camera-profile-tests

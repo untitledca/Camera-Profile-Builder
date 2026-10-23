@@ -425,7 +425,7 @@ enum UpdateInstaller {
     @Published var automaticChecks: Bool {
         didSet { UserDefaults.standard.set(automaticChecks, forKey: "AutomaticallyCheckForUpdates") }
     }
-    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.1.2" }
+    var currentVersion: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "2.2.0" }
     init() {
         automaticChecks = UserDefaults.standard.bool(forKey: "AutomaticallyCheckForUpdates")
         if let data = try? Data(contentsOf: UpdateInstaller.resultURL),
